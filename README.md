@@ -1,2 +1,2 @@
 # HYPAT
-Source code of the HYPAT API
+Source code of the HYPAT Library
