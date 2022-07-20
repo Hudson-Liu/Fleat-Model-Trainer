@@ -370,7 +370,6 @@ class ModelTrainer():
         loss_array = []
         EPOCH_PERCENT = 100.0 / float(self.epochs)
         STEP_PERCENT = 100.0 / self.num_batches_per_epoch
-        print(self.num_batches_per_epoch)
         for epoch in tqdm.tqdm(range(0, self.epochs), desc="Epochs"):
             epoch_list.append(epoch)
             # Iterate over the batches of the dataset.
@@ -408,8 +407,8 @@ class ModelTrainer():
             average_loss = float(loss_sum) / self.num_batches_per_epoch
             loss_array.append(average_loss)
 
-            self.plot1.scatter(epoch_list, loss_array)
-            self.plot1.plot(epoch_list, loss_array)
+            self.plot1.scatter(epoch_list, loss_array, color='blue')
+            self.plot1.plot(epoch_list, loss_array, color='blue')
             self.canvas.draw()
 
             self.pb['value'] += EPOCH_PERCENT
@@ -421,9 +420,9 @@ class GUI():
     def __init__(self):
         """Create GUI"""
         root = tk.Tk()
-        root.title("HYPAT Dashboard")
+        root.title("HYPAT Training Dashboard")
         
-        fig = Figure(figsize = (5, 5), dpi = 100)
+        fig = Figure(figsize = (8, 5), dpi = 100)
         self.plot1 = fig.add_subplot(111)
         self.plot1.set_title("Loss Per Epochs")
         self.plot1.set_xlabel("Epochs")
@@ -449,12 +448,17 @@ class GUI():
 
         self.value_label2 = ttk.Label(root, text="Current Progress: 0%", font=("Arial", 11))
         self.value_label2.grid(column=0, row=1, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
-
+        
+        buttonborder = tk.Frame(root,
+            highlightbackground="#808080",
+            highlightthickness=2,
+            relief="solid")
+        buttonborder.grid(column=0, row=3, padx=(30, 0))
         button = tk.Button(
-            root, text="Start Training", command = self.threading_func,
+            buttonborder, text="Start Training", command = self.threading_func,
             width=20, height=5, font=("Arial", 15)
         )
-        button.grid(column=0, row=3, padx=(30, 0))
+        button.grid(column=0, row=0)
 
         root.mainloop()
     
