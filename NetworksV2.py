@@ -151,6 +151,7 @@ class StructureModel(keras.Model):
         #Anet output is a list of batches of other outputs so no conversion for it
         hnet_output_total = hnet_output_total.numpy()
 
+        sum_loss = 0
         for dataset_number, individual_dataset in enumerate(current_datasets): # Separates the batch into individual dataset
             #anet_output_total = 
 
@@ -233,13 +234,12 @@ class StructureModel(keras.Model):
             last_layer_size = model.layers[-1].output_shape
             if last_layer_size != individual_dataset[1].shape:
                 return INVALID_LOSS
-            try:
-                history = model.fit(x = individual_dataset[0], y = individual_dataset[1], batch_size=batch_size, epochs=EPOCHS, validation_split=0.2)
-            except:
-                print("Something went wrong")
-                return INVALID_LOSS
-
-        return history.history['val_loss']
+            history = model.fit(x = individual_dataset[0], y = individual_dataset[1], batch_size=batch_size, epochs=EPOCHS, validation_split=0.2)
+            loss = history.history['val_loss']
+            sum_loss += loss
+        #If finished, this would use the VGG16 results to form a loss, unfortunately i never fnished this
+        #loss = sum_loss / len(current_datasets) - vgg16_loss
+        #return loss
     
     def convert_optimizer(self, optimizer_num, learning_rate):
         match optimizer_num:
@@ -378,32 +378,27 @@ class ModelTrainer():
             self.pb2['value'] = 0
             self.value_label2['text'] = "Current Progress: 0%"
             for step, (train_imgs, train_ans) in enumerate(train_dataset):
-                #with tf.GradientTape() as tape:
-                    #hnet_output, anet_output = structuremodel([train_imgs, train_ans], training=True)
-
-                    #current_dataset = datasets_sub[step]  # Selects the current dataset
-                    #loss_value = structuremodel.custom_loss(current_dataset, hnet_output, anet_output)
-
-                hnet_output, anet_output = structuremodel([train_imgs, train_ans])
-
-                # Compute the loss value for this minibatch.
+                # Splices datasets_sub into current batch
                 a = step * self.batch_size
                 b = (step * self.batch_size) + self.batch_size
                 if b > len(self.datasets_sub): #catches out of bounds for last batch
                     b = len(self.datasets_sub)
                 current_dataset = self.datasets_sub[a:b]  # Selects the current dataset
-                loss_value = structuremodel.custom_loss(current_dataset, hnet_output, anet_output)
+
+                # Calculates Loss
+                with tf.GradientTape() as tape:
+                    hnet_output, anet_output = structuremodel([train_imgs, train_ans], training=True)
+                    loss_value = structuremodel.custom_loss(current_dataset, hnet_output, anet_output)
                 loss_sum += loss_value
                 
+                # Applies gradients
+                #grads = tape.gradient(loss_value, model.trainable_weights)
+                #optimizer.apply_gradients(zip(grads, model.trainable_weights))
+
+                #Updates progress
                 self.pb2['value'] += STEP_PERCENT
                 self.value_label2['text'] = "Current Progress: " + str(self.pb2['value']) + "%"
-                # Use the gradient tape to automatically retrieve
-                # the gradients of the trainable variables with respect to the loss.
-                #grads = tape.gradient(loss_value, model.trainable_weights)
 
-                # Run one step of gradient descent by updating
-                # the value of the variables to minimize the loss.
-                #optimizer.apply_gradients(zip(grads, model.trainable_weights))
             average_loss = float(loss_sum) / self.num_batches_per_epoch
             loss_array.append(average_loss)
 
@@ -448,6 +443,9 @@ class GUI():
 
         self.value_label2 = ttk.Label(root, text="Current Progress: 0%", font=("Arial", 11))
         self.value_label2.grid(column=0, row=1, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
+
+        self.iter_speed = ttk.Label(root, text="Sec/Iter: ", font=("Arial", 15))
+        self.iter_speed.grid(column=0, row=2, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
         
         buttonborder = tk.Frame(root,
             highlightbackground="#808080",
