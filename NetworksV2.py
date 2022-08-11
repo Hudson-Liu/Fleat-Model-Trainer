@@ -23,7 +23,7 @@ import threading
 
 
 class ArchitectureNet(keras.layers.Layer):  # This will make it possible to repeat this layer over and over
-    max_layers = 15
+    max_layers = 20
 
     def __init__(self, anet_pred_vars, **kwargs):
         super().__init__()
@@ -80,23 +80,25 @@ class StructureModel(keras.Model):
 
     def __init__(self):
         super().__init__()
-
         # Defining the layers for Model.summary() to work
-        self.conv1 = TimeDistributed(Conv2D(filters=64, kernel_size=(3, 3), padding='same', activation='relu'))
-        self.conv2 = TimeDistributed(Conv2D(filters=64, kernel_size=(3, 3), padding='same', activation='relu'))
+        #self.conv1 = TimeDistributed(Conv2D(filters=64, kernel_size=(3, 3), padding='same', activation='relu'))
+        #self.conv2 = TimeDistributed(Conv2D(filters=64, kernel_size=(3, 3), padding='same', activation='relu'))
+        self.conv1 = TimeDistributed(Conv2D(filters=16, kernel_size=(3, 3), padding='same', activation='relu'))
+        self.conv2 = TimeDistributed(Conv2D(filters=16, kernel_size=(3, 3), padding='same', activation='relu'))
         self.pool1 = TimeDistributed(MaxPooling2D(pool_size=(2, 2), strides=2))
 
-        filters_convs = [(128, 2), (256, 3), (512, 3), (512, 3)]
+        #filters_convs = [(128, 2), (256, 3), (512, 3), (512, 3)]
+        filters_convs = [(16, 2), (16, 3), (16, 3), (16, 3)]
         self.vgg16layers = []
         for n_filters, n_convs in filters_convs:
             for _ in range(n_convs):
                 self.vgg16layers.append(TimeDistributed(Conv2D(filters=n_filters, kernel_size=(3, 3), padding='same', activation='relu')))
             self.vgg16layers.append(TimeDistributed(MaxPooling2D(pool_size=(2, 2), strides=2)))
         self.flatten = TimeDistributed(Flatten())
-        self.dense1 = TimeDistributed(Dense(units=1000, activation='relu'), name='Image_Preprocessing')
+        self.dense1 = TimeDistributed(Dense(units=100, activation='relu'), name='Image_Preprocessing')
 
-        self.answerLSTM = TimeDistributed(LSTM(units=500))
-        self.dense2 = TimeDistributed(Dense(units=1000, activation='relu'), name='Answer_Preprocessing/Embed')
+        self.answerLSTM = TimeDistributed(LSTM(units=95))
+        self.dense2 = TimeDistributed(Dense(units=100, activation='relu'), name='Answer_Preprocessing/Embed')
 
         self.concat1 = Concatenate(axis=2)
         self.embedLSTM = LSTM(units=100)
@@ -122,7 +124,7 @@ class StructureModel(keras.Model):
         img_embed = self.dense1(x)
 
         # Answer embedding
-        x = self.answerLSTM(answers)  # All answers, shape (100, None, 95)
+        x = self.answerLSTM(answers)  # All answers, shape (BATCH_SIZE, 100, [number of characters in string], 95)
         answer_embed = self.dense2(x)
 
         # Combines both models
@@ -139,21 +141,35 @@ class StructureModel(keras.Model):
 
         return hnet_output, anet_output
 
+    def summary(self, batch_size):
+        print("[======VGG-16 Summary======]")
+        prevLayer = self.conv1.compute_output_shape((batch_size, 100, 224, 224, 1))
+        print(prevLayer)
+        prevLayer = self.conv2.compute_output_shape(prevLayer)
+        print(prevLayer)
+        prevLayer = self.pool1.compute_output_shape(prevLayer)
+        print(prevLayer)
+        for layer in self.vgg16layers:
+            prevLayer = layer.compute_output_shape(prevLayer)
+            print(prevLayer)
+        self.flatten.compute_output_shape(prevLayer)
+        print(prevLayer)
+    
     def compile(self):
         super().compile()
 
-    def custom_loss(self, current_datasets, hnet_output_total, anet_output_total):
+    def custom_loss(self, current_datasets, hnet_output_total, anet_output_total, resnet_loss, step_num):
         #hyperparameters
-        batch_size = 32
+        BATCH_SIZE = 32
         EPOCHS = 10
-        INVALID_LOSS = 1000  #loss for an invalid run
+        INVALID_LOSS = tf.convert_to_tensor(1000.0, dtype=tf.float32)  #loss for an invalid run
 
         #Anet output is a list of batches of other outputs so no conversion for it
         hnet_output_total = hnet_output_total.numpy()
 
-        sum_loss = 0
+        #Sum of loss during training batches
+        sum_loss = tf.convert_to_tensor(0.0, tf.float32)
         for dataset_number, individual_dataset in enumerate(current_datasets): # Separates the batch into individual dataset
-            #anet_output_total = 
 
             # current_dataset = datasets_sub[step] #Selects the current dataset
             input_layer = keras.Input(shape=(self.resolution[0], self.resolution[1], 1))
@@ -227,19 +243,23 @@ class StructureModel(keras.Model):
             model.compile(
                 loss=keras.losses.CategoricalCrossentropy(from_logits=True),
                 optimizer=optimizer,
-                metrics=["accuracy"],
+                metrics=["accuracy"]
             )
 
             #Verifies if model has the right output dimensions and trains
             last_layer_size = model.layers[-1].output_shape
             if last_layer_size != individual_dataset[1].shape:
                 return INVALID_LOSS
-            history = model.fit(x = individual_dataset[0], y = individual_dataset[1], batch_size=batch_size, epochs=EPOCHS, validation_split=0.2)
-            loss = history.history['val_loss']
-            sum_loss += loss
-        #If finished, this would use the VGG16 results to form a loss, unfortunately i never fnished this
-        #loss = sum_loss / len(current_datasets) - vgg16_loss
-        #return loss
+            history = model.fit(x = individual_dataset[0], y = individual_dataset[1], batch_size=BATCH_SIZE, epochs=EPOCHS, validation_split=0.2)
+            
+            #Grabs loss and adds it to the batch loss
+            loss = tf.convert_to_tensor(history.history['val_loss'][EPOCHS - 1], dtype=tf.float32)
+            loss = tf.subtract(loss, tf.convert_to_tensor(resnet_loss[step_num, dataset_number], dtype=tf.float32))
+            sum_loss = tf.add(sum_loss, loss)
+        # Calculates loss
+        loss = tf.divide(sum_loss, tf.convert_to_tensor(len(current_datasets), dtype=tf.float32))
+        loss_tensor = tf.convert_to_tensor(loss, dtype=tf.float32)
+        return loss_tensor
     
     def convert_optimizer(self, optimizer_num, learning_rate):
         match optimizer_num:
@@ -298,17 +318,19 @@ class StructureModel(keras.Model):
 class ModelTrainer():
     # constants/hyperparameters
     # TODO: MAKE THEM ALL CAPS SINCE THEYRE CONSTANTS
-    batch_size = 2
-    epochs = 10
+    BATCH_SIZE = 1
+    epochs = 50
     train_test_split = 0.25
 
-    def __init__(self, plot1, canvas, pb, value_label, pb2, value_label2):
+    def __init__(self, plot1, canvas, pb, value_label, pb2, value_label2, iter_speed, plot_time):
         self.plot1 = plot1
         self.canvas = canvas
         self.pb = pb
         self.value_label = value_label
         self.pb2 = pb2
         self.value_label2 = value_label2
+        self.iter_speed = iter_speed
+        self.plot_time = plot_time
 
     def import_data(self):
         # Import and preprocess data
@@ -320,6 +342,9 @@ class ModelTrainer():
 
         with open("datasets_sub", "rb") as fp:
             self.datasets_sub = pickle.load(fp)
+            
+        with open("loss", "rb") as fp:
+            self.resnet_loss = pickle.load(fp)
 
         elapsed = round(time.time() - start, 3)
         print("Finished importing data || Elapsed Time: " + str(elapsed) + "s")
@@ -346,9 +371,9 @@ class ModelTrainer():
         print("Finished creating tensors || Total Time: " + str(elapsed) + "s")
 
         # b for batched
-        self.train_img_b = train_img.batch(self.batch_size)
-        self.train_ans_b = train_ans.batch(self.batch_size)
-        self.num_batches_per_epoch = int(len(train) / self.batch_size) + 1 if len(train) > 0 else int(len(train) / self.batch_size) 
+        self.train_img_b = train_img.batch(self.BATCH_SIZE)
+        self.train_ans_b = train_ans.batch(self.BATCH_SIZE)
+        self.num_batches_per_epoch = int(len(train) / self.BATCH_SIZE) + 1 if len(train) > 0 else int(len(train) / self.BATCH_SIZE) 
 
     def generate_tensors(self, data, img_or_ans):
         """Returns a 0 for image, 1 for answer"""
@@ -365,7 +390,8 @@ class ModelTrainer():
     def main_training_loop(self):
         """Main Training Loop: Uses Epochs, train_img_b, train_ans_b, batch_size, and datasets_sub"""
         structuremodel = StructureModel()
-        optimizer = keras.optimizers.SGD(learning_rate=0.001)
+        structuremodel.summary(self.BATCH_SIZE)
+        optimizer = keras.optimizers.SGD(learning_rate=1e-3)
         epoch_list = []
         loss_array = []
         EPOCH_PERCENT = 100.0 / float(self.epochs)
@@ -377,10 +403,11 @@ class ModelTrainer():
             loss_sum = 0
             self.pb2['value'] = 0
             self.value_label2['text'] = "Current Progress: 0%"
+            start = time.time()
             for step, (train_imgs, train_ans) in enumerate(train_dataset):
                 # Splices datasets_sub into current batch
-                a = step * self.batch_size
-                b = (step * self.batch_size) + self.batch_size
+                a = step * self.BATCH_SIZE
+                b = (step * self.BATCH_SIZE) + self.BATCH_SIZE
                 if b > len(self.datasets_sub): #catches out of bounds for last batch
                     b = len(self.datasets_sub)
                 current_dataset = self.datasets_sub[a:b]  # Selects the current dataset
@@ -388,28 +415,33 @@ class ModelTrainer():
                 # Calculates Loss
                 with tf.GradientTape() as tape:
                     hnet_output, anet_output = structuremodel([train_imgs, train_ans], training=True)
-                    loss_value = structuremodel.custom_loss(current_dataset, hnet_output, anet_output)
+                    loss_value = structuremodel.custom_loss(current_dataset, hnet_output, anet_output, self.resnet_loss[step], step)
                 loss_sum += loss_value
                 
                 # Applies gradients
-                #grads = tape.gradient(loss_value, model.trainable_weights)
-                #optimizer.apply_gradients(zip(grads, model.trainable_weights))
+                grads = tape.gradient(loss_value, structuremodel.trainable_weights)
+                optimizer.apply_gradients(zip(grads, structuremodel.trainable_weights))
 
                 #Updates progress
                 self.pb2['value'] += STEP_PERCENT
                 self.value_label2['text'] = "Current Progress: " + str(self.pb2['value']) + "%"
 
+            #Records iteration time and starts recording plot time
+            self.iter_speed = "Sec/Epoch: " + str(time.time() - start)
+            start = time.time()
+            
             average_loss = float(loss_sum) / self.num_batches_per_epoch
             loss_array.append(average_loss)
-
+            
             self.plot1.scatter(epoch_list, loss_array, color='blue')
             self.plot1.plot(epoch_list, loss_array, color='blue')
             self.canvas.draw()
 
+            self.plot_time = "Plot Time: " + str(time.time() - start)
+            
             self.pb['value'] += EPOCH_PERCENT
             self.value_label['text'] = "Current Progress: " + str(self.pb['value']) + "%"
             
-
 
 class GUI():
     def __init__(self):
@@ -427,25 +459,28 @@ class GUI():
         self.canvas.get_tk_widget().grid(column=2, row=0, rowspan=5)
 
         self.caption = ttk.Label(root, text="Epochs", font=("Arial", 15))
-        self.caption.grid(column=0, row=0, sticky=tk.N, columnspan=2, padx=10, pady=(15,10))
+        self.caption.grid(column=0, row=0, sticky=tk.N, columnspan=2, padx=10)
 
         self.pb = ttk.Progressbar(root, orient='horizontal', mode='determinate', length=300)
         self.pb.grid(column=0, row=0, columnspan=2, padx=10)
 
         self.value_label = ttk.Label(root, text="Current Progress: 0%", font=("Arial", 11))
-        self.value_label.grid(column=0, row=0, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
+        self.value_label.grid(column=0, row=0, sticky=tk.S, columnspan=2, padx=10, pady=5)
 
         self.caption2 = ttk.Label(root, text="Batches", font=("Arial", 15))
-        self.caption2.grid(column=0, row=1, sticky=tk.N, columnspan=2, padx=10, pady=(15,10))
+        self.caption2.grid(column=0, row=1, sticky=tk.N, columnspan=2, padx=10)
 
         self.pb2 = ttk.Progressbar(root, orient='horizontal', mode='determinate', length=300)
         self.pb2.grid(column=0, row=1, columnspan=2, padx=10)
 
         self.value_label2 = ttk.Label(root, text="Current Progress: 0%", font=("Arial", 11))
-        self.value_label2.grid(column=0, row=1, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
+        self.value_label2.grid(column=0, row=1, sticky=tk.S, columnspan=2, padx=10, pady=5)
 
-        self.iter_speed = ttk.Label(root, text="Sec/Iter: ", font=("Arial", 15))
-        self.iter_speed.grid(column=0, row=2, sticky=tk.S, columnspan=2, padx=10, pady=(0, 20))
+        self.iter_speed = ttk.Label(root, text="Sec/Epoch: ", font=("Arial", 13))
+        self.iter_speed.grid(column=0, row=2, sticky=tk.NW, columnspan=2, padx=10, pady=20)
+        
+        self.plot_time = ttk.Label(root, text="Plot Time: ", font=("Arial", 13))
+        self.plot_time.grid(column=0, row=2, sticky=tk.SW, columnspan=2, padx=10, pady=(0, 20))
         
         buttonborder = tk.Frame(root,
             highlightbackground="#808080",
@@ -453,7 +488,7 @@ class GUI():
             relief="solid")
         buttonborder.grid(column=0, row=3, padx=(30, 0))
         button = tk.Button(
-            buttonborder, text="Start Training", command = self.threading_func,
+            buttonborder, text="Start Training", command = self.threading_func, #change back to threading_func for multithreading
             width=20, height=5, font=("Arial", 15)
         )
         button.grid(column=0, row=0)
@@ -466,7 +501,7 @@ class GUI():
 
     def work(self):
         #Initialize Model
-        modeltrainer = ModelTrainer(self.plot1, self.canvas, self.pb, self.value_label, self.pb2, self.value_label2)
+        modeltrainer = ModelTrainer(self.plot1, self.canvas, self.pb, self.value_label, self.pb2, self.value_label2, self.iter_speed, self.plot_time)
         modeltrainer.import_data()
         modeltrainer.main_training_loop()
     
