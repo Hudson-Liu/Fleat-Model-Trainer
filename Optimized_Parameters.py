@@ -37,6 +37,16 @@ for model in models:
     for optimizer in optimizers:
         for dataset in datasets:
             model_sets.append([model, optimizer, dataset])
+#SubSets
+RUN = 3 #Has to be either 0, 1, 2, or 3; 0 runs for 4 hours, 1 & 2 runs for 10 hours, 3 runs for 4 hours
+if RUN == 0: #18
+    model_sets = model_sets[:int(len(model_sets)*(4/28))]
+elif RUN == 1: #46
+    model_sets = model_sets[int(len(model_sets)*(4/28)):int(len(model_sets)*(14/28))]
+elif RUN == 2: #45
+    model_sets = model_sets[int(len(model_sets)*(14/28)):int(len(model_sets)*(24/28))]
+elif RUN == 3: #19
+    model_sets = model_sets[int(len(model_sets)*(24/28)):]
 
 #Create a method that takes in a list of model, optimizer, and dataset, and runs keras tuner to find the best learning rate
 best_hps = []
@@ -61,6 +71,7 @@ def create_models(model_sets):
         best_hps.append([param_number, set[1], tuner.get_best_hyperparameters(num_trials=1)[0].get("Learning_Rate")])
         with open(f"model_runs_{counter}", "wb") as fp:
             pickle.dump(best_hps, fp)
+        counter += 1
         
 class ModelCreator:
     def __init__(self, set):
