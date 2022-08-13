@@ -61,7 +61,7 @@ def create_models(model_sets):
             overwrite=True, #Every time it's ran the results are resaved
             max_epochs=10,
             factor=3,
-            project_name=f'Keras_Tuner_Results_{counter}'
+            project_name='Keras_Tuner_LATEST_Results'
         )
         stop_early = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
         tuner.search(set[2][0], set[2][1], epochs=50, validation_split=0.2, callbacks=[stop_early])
