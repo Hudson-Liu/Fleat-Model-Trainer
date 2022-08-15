@@ -58,8 +58,8 @@ model = keras.Model([img_input, properties_input], output)
 print("Started importing data")
 start = time.time()
 
-#directory = "/kaggle/input/dataset/" #for kaggle
-directory = "" #for local
+directory = "/kaggle/input/dataset-but-with-sub-dataset-data/" #for kaggle
+#directory = "" #for local
 with open(f"{directory}datasets", "rb") as fp:
     datasets = pickle.load(fp)
     
@@ -93,15 +93,13 @@ for index, element in enumerate(encoded):
     element.append(normalized_param[index])
 
 #Concatenates all the features together to produce "x"
-#dataset_types = [i[2] for i in true_rates] #TODO this is also fro the proper output
-dataset_types = ["fashion-mnist", "cifar10", "cifar100", "mnist", "fashion-mnist", "cifar10", "cifar100", "mnist", "fashion-mnist", "cifar10", "cifar100", "mnist", "fashion-mnist", "cifar10", "cifar100", "mnist", "fashion-mnist", "cifar10"]
+dataset_types = [i[2] for i in true_rates]
 images = np.array([datasets[l] for l in dataset_types])
 encoded = np.array(encoded)
 
 #Create x and y
 x = [images, encoded]
-#y = [i[3] for i in true_rates] #TODO this is for the proper modified output of optimized parameters
-y = np.array([i[2] for i in true_rates])
+y = np.array([i[3] for i in true_rates])
 
 elapsed = round(time.time() - start, 3)
 print(f"Finished importing data || Elapsed Time: {elapsed}s")
