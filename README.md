@@ -1,5 +1,5 @@
-# HYPT
-Source code of the HYPT Library
+# Fleat
+Source code of the Fleat Library
 
 # Useful Links
 [The newest version of the "datasets" file (containing all the datasets used by the mainnet)](https://drive.google.com/file/d/1dZN-PsVTCHx-0c1xMaBPe_qE3QJ8qnnb/view?usp=sharing)
