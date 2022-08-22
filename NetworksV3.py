@@ -14,11 +14,12 @@ import tensorflow as tf
 import time
 import numpy as np
 import datetime
-import config
 import math
 import random
+import keras_tuner as kt
+import config
 
-class DatasetGenerator(keras.utils.Sequence):
+class DatasetGenerator(tf.keras.utils.Sequence):
     cursor = [0, 0]
     
     def __init__(self, datasets, dataset_identifiers, subnet_data, y, BATCH_SIZE, DATASET_SEGMENTS, NUM_IMAGES):
@@ -59,15 +60,15 @@ class DatasetGenerator(keras.utils.Sequence):
         self.cursor[1] = 0
         
 class ModelTrainer():
-    #directory = "/kaggle/input/dataset-but-with-sub-dataset-data/" #for kaggle
-    directory = "" #for local
+    directory = "/kaggle/input/dataset-but-with-sub-dataset-data/" #for kaggle
+    #directory = "" #for local
     NUM_IMAGES = 100  # images per timestep
     TRAIN_TEST_SPLIT = 0.2
     BATCH_SIZE = 2 #Batch size of 1 will not work for whatever reaosn
     NUM_OPTIMIZERS = 8 # Number of unique optimizers being used in "Optimized_Parameters.py"
     DATASET_SEGMENTS = math.floor(config.NUM_IMAGES_MAIN / NUM_IMAGES)
     
-    def create_model(self):
+    def create_model(self, hp):
         start = time.time()
         print("Started creating model")
         
@@ -76,35 +77,59 @@ class ModelTrainer():
         x = TimeDistributed(Conv2D(filters=8, kernel_size=(3, 3), padding='same', activation='relu'))(img_input) #Full scale model has 64 filters for both
         x = TimeDistributed(Conv2D(filters=8, kernel_size=(3, 3), padding='same', activation='relu'))(x)
         x = TimeDistributed(MaxPooling2D(pool_size=(2, 2), strides=2))(x)
-        #filters_convs = [(128, 2), (256, 3), (512, 3), (512, 3)] #Full scale model, my computer doesn't have enough GPU memory for it
-        filters_convs = [(8, 2), (8, 3), (8, 3), (8, 3)] #Reduced scale model, easier on GPU memory
+        
+        #Fine tune VGG16
+        filters1 = hp.Int('filters1', min_value=8, max_value=128, step=8)
+        filters2 = hp.Int('filters2', min_value=8, max_value=128, step=8)
+        filters3 = hp.Int('filters3', min_value=8, max_value=128, step=8)
+        filters4 = hp.Int('filters4', min_value=8, max_value=128, step=8)
+        
+        #VGG16
+        filters_convs = [(filters1, 2), (filters2, 3), (filters3, 3), (filters4, 3)] #Full scale model, my computer doesn't have enough GPU memory for it
+        #filters_convs = [(8, 2), (8, 3), (8, 3), (8, 3)] #Reduced scale model, easier on GPU memory
         for n_filters, n_convs in filters_convs:
             for _ in range(n_convs):
                 x = TimeDistributed(Conv2D(filters=n_filters, kernel_size=(3, 3), padding='same', activation='relu'))(x)
             x = TimeDistributed(MaxPooling2D(pool_size=(2, 2), strides=2))(x)
         x = TimeDistributed(Flatten())(x)
         x = TimeDistributed(Dense(units=50), name='Image_Preprocessing')(x)
-        x = LSTM(units=50)(x)
+        
+        #Fine tune Embedding
+        lstm_units = hp.Int('lstm', min_value=10, max_value=200, step=10)
+        image_embed_units = hp.Int('embed', min_value=10, max_value=200, step=10)
+        
+        #Image Embedding
+        x = LSTM(units=lstm_units)(x)
         x = Dropout(.2)(x)
         x = BatchNormalization()(x)
-        dataset_embed = Dense(units=50, activation='relu', name='Image_Embed')(x)
-        x = Dropout(.2)(x)
-
+        dataset_embed = Dense(units=image_embed_units, activation='relu', name='Image_Embed')(x)
+        dataset_embed = Dropout(.2)(dataset_embed)
+        
+        #Fine tune model
+        model_embed_units = hp.Int('model_embed', min_value=10, max_value=200, step=10)
+        
         # Model properties embedding
         properties_input = keras.Input(shape=(self.NUM_OPTIMIZERS + 1))
-        properties_embed = Dense(units=50, name='Model_Properties_Embed')(properties_input)
-        x = Dropout(.2)(x)
+        properties_embed = Dense(units=model_embed_units, name='Model_Properties_Embed')(properties_input)
+        x = Dropout(.2)(properties_embed)
 
         # Combines both models
         merge = Concatenate(axis=1, name="Total_Embed")([dataset_embed, properties_embed])
-
+        
+        #Fune tune learning rate output size
+        output_units = hp.Int('output_dense', min_value=10, max_value=200, step=10)
+        
         # learning rate output
-        x = Dense(units=100, activation='relu')(merge)
+        x = Dense(units=output_units, activation='relu')(merge)
         x = Dropout(.2)(x)
         output = Dense(units=1, name='Learning_Rate', activation='relu')(x)
 
         # This model covers all the inputs and outputs
         model = keras.Model([img_input, properties_input], output)
+        
+        #Compile model
+        hp_learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=hp_learning_rate), loss="mse", metrics=[tf.keras.metrics.MeanAbsoluteError()])
         
         elapsed_time = time.time() - start
         print(f"Finished creating model || Elapsed time: {elapsed_time}s")
@@ -186,7 +211,7 @@ class ModelTrainer():
     
     def train_model(self):
         """Trains and saves model"""
-        model = self.create_model()
+        #Import data
         datasets, true_rates = self.import_data()
         
         #Time preprocessing
@@ -218,10 +243,26 @@ class ModelTrainer():
         log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
         
-        #Just add some more preprocessing and a model.fit and you'll be done
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss="mse", metrics=[tf.keras.metrics.MeanAbsoluteError()])
+        #Create dataset generators
         train_generator = DatasetGenerator(datasets, identifiers_train, subnet_train, y_train, self.BATCH_SIZE, self.DATASET_SEGMENTS, self.NUM_IMAGES)
         test_generator = DatasetGenerator(datasets, identifiers_test, subnet_test, y_test, self.BATCH_SIZE, self.DATASET_SEGMENTS, self.NUM_IMAGES)
+        
+        #Tune hyperparameters
+        tuner = kt.Hyperband(self.create_model,
+                     objective='val_mean_absolute_error',
+                     max_epochs=20,
+                     factor=3,
+                     project_name='intro_to_kt')
+        stop_early = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
+        tuner.search(train_generator, 
+                     epochs=10, 
+                     batch_size=self.BATCH_SIZE, 
+                     validation_data=test_generator, 
+                     callbacks=[stop_early])
+        best_hps=tuner.get_best_hyperparameters(num_trials=1)[0]
+        
+        #Train final model
+        model = tuner.hypermodel.build(best_hps)
         model.fit(train_generator,
                   epochs=10,
                   batch_size=self.BATCH_SIZE,
